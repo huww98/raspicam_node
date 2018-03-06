@@ -126,16 +126,12 @@ typedef struct {
     RASPICAM_CAMERA_PARAMETERS camera_parameters;  /// Camera setup parameters
 
     MMAL_COMPONENT_T *camera_component;     /// Pointer to the camera component
-    MMAL_COMPONENT_T *encoder_component;    /// Pointer to the encoder component
     MMAL_CONNECTION_T *preview_connection;  /// Pointer to the connection from
                                             /// camera to preview
-    MMAL_CONNECTION_T *encoder_connection;  /// Pointer to the connection from
-                                            /// camera to encoder
 
-    //MMAL_POOL_T *video_pool;  /// Pointer to the pool of buffers used by encoder
-                              /// output port
+    /// output port
     MMAL_POOL_T *camera_pool;  /// Pointer to the pool of buffers used by
-                                /// encoder output port
+                               /// camera output port
     ros::Publisher *image_pub;
 } RASPIVID_STATE;
 
@@ -197,10 +193,10 @@ static void get_status(RASPIVID_STATE *state) {
         if (temp > 0 && temp <= 100)
             state->quality = temp;
         else
-            state->quality = 90;
+            state->quality = 80;
     } else {
-        state->quality = 90;
-        ros::param::set("~quality", 90);
+        state->quality = 80;
+        ros::param::set("~quality", 80);
     }
 
     if (ros::param::get("~framerate", temp)) {
@@ -255,31 +251,10 @@ static void get_status(RASPIVID_STATE *state) {
         state->camera_parameters.shutter_speed = 0;
         ros::param::set("~shutter_speed", 0);
     }
-	
-    if (ros::param::get("~color_effects_u", temp)) {
-        state->camera_parameters.colourEffects.u = temp;
-    } else {
-        state->camera_parameters.colourEffects.u = 128;
-        ros::param::set("~color_effects_u", 128);
-    }
-
-    if (ros::param::get("~color_effects_v", temp)) {
-        state->camera_parameters.colourEffects.v = temp;
-    } else {
-        state->camera_parameters.colourEffects.v = 128;
-        ros::param::set("~color_effects_v", 128);
-    }
-	
-    if (ros::param::get("~color_effects_enable", temp_bool)) {
-        state->camera_parameters.colourEffects.enable = temp_bool;
-    } else {
-        state->camera_parameters.colourEffects.enable = 0;
-        ros::param::set("~color_effects_enable", 0);
-    }
 }
 
 /**
- *  buffer header callback function for encoder
+ *  buffer header callback function for camera
  *
  *  Callback will dump buffer data to the specific file
  *
@@ -287,7 +262,7 @@ static void get_status(RASPIVID_STATE *state) {
  * @param buffer mmal buffer header pointer
  */
 static void camera_buffer_callback(MMAL_PORT_T *port,
-                                    MMAL_BUFFER_HEADER_T *buffer) {
+                                   MMAL_BUFFER_HEADER_T *buffer) {
     MMAL_BUFFER_HEADER_T *new_buffer;
     int complete = 0;
 
@@ -336,12 +311,12 @@ static void camera_buffer_callback(MMAL_PORT_T *port,
                     msg.header.seq = pData->frame;
                     msg.header.frame_id = camera_frame_id;
                     msg.header.stamp = ros::Time::now();
-					msg.height = pData->pstate->height;
-					msg.width = pData->pstate->width;
-					msg.encoding = "rgba8";
-					msg.is_bigendian = 0;
-					msg.step = pData->pstate->width*4;
-					msg.data.insert(
+                    msg.height = pData->pstate->height;
+                    msg.width = pData->pstate->width;
+                    msg.encoding = "rgba8";
+                    msg.is_bigendian = 0;
+                    msg.step = pData->pstate->width * 4;
+                    msg.data.insert(
                         msg.data.end(), pData->buffer[pData->frame & 1],
                         &(pData->buffer[pData->frame & 1][pData->id]));
                     image_pub.publish(msg);
@@ -368,8 +343,8 @@ static void camera_buffer_callback(MMAL_PORT_T *port,
         if (new_buffer) status = mmal_port_send_buffer(port, new_buffer);
 
         if (!new_buffer || status != MMAL_SUCCESS) {
-            vcos_log_error("Unable to return a buffer to the encoder port");
-            ROS_ERROR("Unable to return a buffer to the encoder port");
+            vcos_log_error("Unable to return a buffer to the camera port");
+            ROS_ERROR("Unable to return a buffer to the camera port");
         }
     }
 }
@@ -386,7 +361,7 @@ static MMAL_COMPONENT_T *create_camera_component(RASPIVID_STATE *state) {
     MMAL_COMPONENT_T *camera = 0;
     MMAL_ES_FORMAT_T *format;
     MMAL_PORT_T *preview_port = NULL, *video_port = NULL, *still_port = NULL;
-	MMAL_POOL_T *pool;
+    MMAL_POOL_T *pool;
     MMAL_STATUS_T status;
 
     /* Create the component */
@@ -431,10 +406,8 @@ static MMAL_COMPONENT_T *create_camera_component(RASPIVID_STATE *state) {
     // Set the encode format on the video  port
 
     format = video_port->format;
-	format->encoding = MMAL_ENCODING_RGBA;
-	format->encoding_variant = MMAL_ENCODING_RGBA;
-
-    //format->encoding = MMAL_ENCODING_I420;
+    format->encoding = MMAL_ENCODING_RGBA;
+    format->encoding_variant = MMAL_ENCODING_RGBA;
     format->es->video.width = state->width;
     format->es->video.height = state->height;
     format->es->video.crop.x = 0;
@@ -497,15 +470,16 @@ static MMAL_COMPONENT_T *create_camera_component(RASPIVID_STATE *state) {
     raspicamcontrol_set_all_parameters(camera, &state->camera_parameters);
 
     /* Create pool of buffer headers for the output port to consume */
-    pool = mmal_port_pool_create(video_port, video_port->buffer_num, video_port->buffer_size);
- 
-    if (!pool)
-    {
-       vcos_log_error("Failed to create buffer header pool for camera port %s", video_port->name);
+    pool = mmal_port_pool_create(video_port, video_port->buffer_num,
+                                 video_port->buffer_size);
+
+    if (!pool) {
+        vcos_log_error("Failed to create buffer header pool for camera port %s",
+                       video_port->name);
     }
- 
-    state->camera_pool = pool;	
-	
+
+    state->camera_pool = pool;
+
     state->camera_component = camera;
 
     ROS_INFO("Camera component done\n");
@@ -530,156 +504,6 @@ static void destroy_camera_component(RASPIVID_STATE *state) {
         mmal_component_destroy(state->camera_component);
         state->camera_component = NULL;
     }
-}
-
-/**
- * Create the encoder component, set up its ports
- *
- * @param state Pointer to state control struct
- *
- * @return MMAL_SUCCESS if all OK, something else otherwise
- *
- */
-/*static MMAL_STATUS_T create_encoder_component(RASPIVID_STATE *state) {
-    MMAL_COMPONENT_T *encoder = 0;
-    MMAL_PORT_T *encoder_input = NULL, *encoder_output = NULL;
-    MMAL_STATUS_T status;
-    MMAL_POOL_T *pool;
-
-    status =
-        mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &encoder);
-
-    if (status != MMAL_SUCCESS) {
-        vcos_log_error("Unable to create video encoder component");
-        ROS_ERROR("Unable to create video encoder component");
-        goto error;
-    }
-
-    if (!encoder->input_num || !encoder->output_num) {
-        status = MMAL_ENOSYS;
-        vcos_log_error("Video encoder doesn't have input/output ports");
-        ROS_ERROR("Video encoder doesn't have input/output ports");
-        goto error;
-    }
-
-    encoder_input = encoder->input[0];
-    encoder_output = encoder->output[0];
-
-    // We want same format on input and output
-    mmal_format_copy(encoder_output->format, encoder_input->format);
-
-    // Only supporting H264 at the moment
-    encoder_output->format->encoding = MMAL_ENCODING_JPEG;
-
-    encoder_output->buffer_size = encoder_output->buffer_size_recommended;
-
-    if (encoder_output->buffer_size < encoder_output->buffer_size_min)
-        encoder_output->buffer_size = encoder_output->buffer_size_min;
-
-    encoder_output->buffer_num = encoder_output->buffer_num_recommended;
-
-    if (encoder_output->buffer_num < encoder_output->buffer_num_min)
-        encoder_output->buffer_num = encoder_output->buffer_num_min;
-
-    // Commit the port changes to the output port
-    status = mmal_port_format_commit(encoder_output);
-
-    if (status != MMAL_SUCCESS) {
-        vcos_log_error("Unable to set format on video encoder output port");
-        ROS_ERROR("Unable to set format on video encoder output port");
-        goto error;
-    }
-
-    // Set the JPEG quality level
-    status = mmal_port_parameter_set_uint32(
-        encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, state->quality);
-
-    if (status != MMAL_SUCCESS) {
-        vcos_log_error("Unable to set JPEG quality");
-        ROS_ERROR("Unable to set JPEG quality");
-        goto error;
-    }
-
-    //  Enable component
-    status = mmal_component_enable(encoder);
-
-    if (status != MMAL_SUCCESS) {
-        vcos_log_error("Unable to enable video encoder component");
-        ROS_ERROR("Unable to enable video encoder component");
-        goto error;
-    }
-
-    /* Create pool of buffer headers for the output port to consume 
-    pool = mmal_port_pool_create(encoder_output, encoder_output->buffer_num,
-                                 encoder_output->buffer_size);
-
-    if (!pool) {
-        vcos_log_error(
-            "Failed to create buffer header pool for encoder output port %s",
-            encoder_output->name);
-        ROS_ERROR(
-            "Failed to create buffer header pool for encoder output port %s",
-            encoder_output->name);
-    }
-
-    state->encoder_pool = pool;
-    state->encoder_component = encoder;
-
-    ROS_INFO("Encoder component done\n");
-
-    return status;
-
-error:
-    if (encoder) mmal_component_destroy(encoder);
-
-    return status;
-}*/
-
-/**
- * Destroy the encoder component
- *
- * @param state Pointer to state control struct
- *
- */
-/*static void destroy_encoder_component(RASPIVID_STATE *state) {
-    // Get rid of any port buffers first
-    if (state->video_pool) {
-        mmal_port_pool_destroy(state->encoder_component->output[0],
-                               state->video_pool);
-    }
-
-    if (state->encoder_component) {
-        mmal_component_destroy(state->encoder_component);
-        state->encoder_component = NULL;
-    }
-}*/
-
-/**
- * Connect two specific ports together
- *
- * @param output_port Pointer the output port
- * @param input_port Pointer the input port
- * @param Pointer to a mmal connection pointer, reassigned if function
- * successful
- * @return Returns a MMAL_STATUS_T giving result of operation
- *
- */
-static MMAL_STATUS_T connect_ports(MMAL_PORT_T *output_port,
-                                   MMAL_PORT_T *input_port,
-                                   MMAL_CONNECTION_T **connection) {
-    MMAL_STATUS_T status;
-
-    status =
-        mmal_connection_create(connection, output_port, input_port,
-                               MMAL_CONNECTION_FLAG_TUNNELLING |
-                                   MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT);
-
-    if (status == MMAL_SUCCESS) {
-        status = mmal_connection_enable(*connection);
-        if (status != MMAL_SUCCESS) mmal_connection_destroy(*connection);
-    }
-
-    return status;
 }
 
 /**
@@ -718,8 +542,6 @@ int init_cam(RASPIVID_STATE *state) {
     MMAL_PORT_T *camera_video_port = NULL;
     MMAL_PORT_T *camera_still_port = NULL;
     MMAL_PORT_T *preview_input_port = NULL;
-    // MMAL_PORT_T *encoder_input_port = NULL;
-    // MMAL_PORT_T *encoder_output_port = NULL;
 
     bcm_host_init();
     get_status(state);
@@ -733,25 +555,13 @@ int init_cam(RASPIVID_STATE *state) {
 
     if (!create_camera_component(state)) {
         ROS_INFO("%s: Failed to create camera component", __func__);
-    } /*else if ((status = create_encoder_component(state)) != MMAL_SUCCESS) {
-        ROS_INFO("%s: Failed to create encode component", __func__);
-        destroy_camera_component(state);
-    }*/ else {
+    } else {
         PORT_USERDATA *callback_data_enc =
             (PORT_USERDATA *)malloc(sizeof(PORT_USERDATA));
         camera_video_port =
             state->camera_component->output[MMAL_CAMERA_VIDEO_PORT];
         camera_still_port =
             state->camera_component->output[MMAL_CAMERA_CAPTURE_PORT];
-        //encoder_input_port = state->encoder_component->input[0];
-        //encoder_output_port = state->encoder_component->output[0];
-        /*status = connect_ports(camera_video_port, encoder_input_port,
-                               &state->encoder_connection);
-        if (status != MMAL_SUCCESS) {
-            ROS_INFO("%s: Failed to connect camera video port to encoder input",
-                     __func__);
-            return 1;
-        }*/
         callback_data_enc->buffer[0] = (unsigned char *)malloc(IMG_BUFFER_SIZE);
         callback_data_enc->buffer[1] = (unsigned char *)malloc(IMG_BUFFER_SIZE);
         // Set up our userdata - this is passed though to the callback where we
@@ -760,15 +570,13 @@ int init_cam(RASPIVID_STATE *state) {
         callback_data_enc->abort = 0;
         callback_data_enc->id = 0;
         callback_data_enc->frame = 0;
-        //encoder_output_port->userdata =
-		camera_video_port->userdata = 
-			(struct MMAL_PORT_USERDATA_T *)callback_data_enc;
+        camera_video_port->userdata =
+            (struct MMAL_PORT_USERDATA_T *)callback_data_enc;
         PORT_USERDATA *pData = (PORT_USERDATA *)camera_video_port->userdata;
-        // Enable the encoder output port and tell it its callback function
-        // status = mmal_port_enable(encoder_output_port, encoder_buffer_callback);
-		status = mmal_port_enable(camera_video_port, camera_buffer_callback);
+        // Enable the camera output port and tell it its callback function
+        status = mmal_port_enable(camera_video_port, camera_buffer_callback);
         if (status != MMAL_SUCCESS) {
-            ROS_INFO("Failed to setup encoder output");
+            ROS_INFO("Failed to setup camera output");
             return 1;
         }
         state->isInit = 1;
@@ -780,7 +588,6 @@ int start_capture(RASPIVID_STATE *state) {
     if (!(state->isInit)) init_cam(state);
     MMAL_PORT_T *camera_video_port =
         state->camera_component->output[MMAL_CAMERA_VIDEO_PORT];
-    // MMAL_PORT_T *encoder_output_port = state->encoder_component->output[0];
     ROS_INFO("Starting video capture (%d, %d, %d, %d)\n", state->width,
              state->height, state->quality, state->framerate);
 
@@ -803,8 +610,7 @@ int start_capture(RASPIVID_STATE *state) {
                           q);
             }
 
-            //if (mmal_port_send_buffer(encoder_output_port, buffer) !=
-			if (mmal_port_send_buffer(camera_video_port, buffer)!=
+            if (mmal_port_send_buffer(camera_video_port, buffer) !=
                 MMAL_SUCCESS) {
                 vcos_log_error(
                     "Unable to send a buffer to encoder output port (%d)", q);
@@ -821,9 +627,7 @@ int close_cam(RASPIVID_STATE *state) {
     if (state->isInit) {
         state->isInit = 0;
         MMAL_COMPONENT_T *camera = state->camera_component;
-		MMAL_PORT_T *camera_video_port   = camera->output[MMAL_CAMERA_VIDEO_PORT];
-        //MMAL_COMPONENT_T *encoder = state->encoder_component;
-        //MMAL_PORT_T *encoder_output_port = state->encoder_component->output[0];
+        MMAL_PORT_T *camera_video_port = camera->output[MMAL_CAMERA_VIDEO_PORT];
         MMAL_PORT_T *camera_still_port =
             camera->output[MMAL_CAMERA_CAPTURE_PORT];
         PORT_USERDATA *pData = (PORT_USERDATA *)camera_video_port->userdata;
@@ -831,14 +635,10 @@ int close_cam(RASPIVID_STATE *state) {
         if (camera_still_port && camera_still_port->is_enabled)
             mmal_port_disable(camera_still_port);
 
-		if (camera_video_port && camera_video_port->is_enabled)
-			mmal_port_disable(camera_video_port);
-
-        //mmal_connection_destroy(state->encoder_connection);
+        if (camera_video_port && camera_video_port->is_enabled)
+            mmal_port_disable(camera_video_port);
 
         // Disable components
-        //if (encoder) mmal_component_disable(encoder);
-
         if (camera) mmal_component_disable(camera);
 
         // Destroy encoder component
@@ -850,10 +650,6 @@ int close_cam(RASPIVID_STATE *state) {
         free(pData->buffer[0]);
         free(pData->buffer[1]);
 
-        /*if (encoder) {
-            mmal_component_destroy(encoder);
-            encoder = NULL;
-        }*/
         // destroy camera component
         if (camera) {
             mmal_component_destroy(camera);
@@ -946,8 +742,7 @@ int main(int argc, char **argv) {
         ROS_INFO("Camera successfully calibrated");
     }
 
-    image_pub =
-        n.advertise<sensor_msgs::Image>("image", 1);
+    image_pub = n.advertise<sensor_msgs::Image>("image", 1);
     camera_info_pub = n.advertise<sensor_msgs::CameraInfo>("camera_info", 1);
 
     dynamic_reconfigure::Server<raspicam_node::CameraConfig> server;
